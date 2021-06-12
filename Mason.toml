@@ -1,0 +1,10 @@
+
+[brick]
+name = "Channel"
+version = "0.1.0"
+chplVersion = "1.24.0"
+license = "None"
+
+[dependencies]
+
+
