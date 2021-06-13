@@ -56,7 +56,7 @@ module Channel {
             lock();
             
             var x : eltType;
-            if count == 0 {
+            if count == 0 && sendWaiters.size == 0 {
                 var processing = new shared Waiter(x);
                 recvWaiters.push_back(processing);
                 
@@ -66,7 +66,9 @@ module Channel {
                 return x;
             }
 
-            x = buffer[recvidx];
+            if bufferSize > 0 {
+                x = buffer[recvidx];
+            }
             
             if sendWaiters.size > 0 {
 
@@ -77,6 +79,7 @@ module Channel {
                     sendidx = (sendidx + 1) % bufferSize;
                     recvidx = (recvidx + 1) % bufferSize;
                 }
+                else x = sender.x;
 
                 sender.release();
             }
@@ -97,7 +100,7 @@ module Channel {
         proc send(val : eltType) {
             lock();
 
-            if count == bufferSize {
+            if count == bufferSize && recvWaiters.size == 0 {
                 var processing = new shared Waiter(val);
                 
                 sendWaiters.push_back(processing);
