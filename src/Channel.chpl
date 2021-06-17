@@ -6,12 +6,10 @@ module Channel {
     class Waiter {
         
         var process$ : single bool;
-        var x;
-        
+        var x; 
 
         proc init(x1) {
-            x = x1;
-            
+            x = x1;    
         }
 
         proc suspend() {
@@ -52,7 +50,6 @@ module Channel {
         }
 
         proc recv() : eltType {
-            
             lock();
             
             var x : eltType;
@@ -90,7 +87,6 @@ module Channel {
                 count -= 1;
 
             }
-
             unlock();
 
             return x;
@@ -129,8 +125,6 @@ module Channel {
                 unlock();
             }
         }
-
-
     }
-    
+
 }
