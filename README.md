@@ -3,7 +3,7 @@
 A channel is a FIFO data structure used to communicate between different Chapel tasks.
 Since the operations on channel are blocking by default, it enables to send values from one task to another in a synchronized manner.
 
-The module would have a higher level class `Channel` to store the channel buffer and support operations on them.
+The module would comprise a class `Channel` to store the channel buffer and support operations on them.
 
 The features inspired from the original Go Channels.
   
