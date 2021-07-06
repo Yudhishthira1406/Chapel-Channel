@@ -12,12 +12,12 @@ module Channel {
             x = x1;    
         }
 
-        proc suspend() {
-            process$.readFF();
+        proc suspend() : bool {
+            return process$.readFF();
         }
 
-        proc release() {
-            process$.writeEF(true);
+        proc release(status : bool) {
+            process$.writeEF(status);
         }
     }
 
@@ -28,6 +28,7 @@ module Channel {
         var sendidx = 0;
         var recvidx = 0;
         var count = 0;
+        var closed = false;
 
         var sendWaiters : LinkedList(shared Waiter);
         var recvWaiters : LinkedList(shared Waiter);
@@ -49,25 +50,33 @@ module Channel {
             lock$.readFE();
         }
 
-        proc recv() : eltType {
+        proc recv() : (eltType, bool) {
             lock();
             
             var x : eltType;
+
+            if closed && count == 0 {
+                unlock();
+                return (x, false);
+            }
+
             if count == 0 && sendWaiters.size == 0 {
                 var processing = new shared Waiter(x);
                 recvWaiters.push_back(processing);
                 
                 unlock();
-                processing.suspend();
+                if processing.suspend() == false {
+                    return (x, false);
+                }
                 x = processing.x;
-                return x;
+                return (x, true);
             }
 
             if bufferSize > 0 {
                 x = buffer[recvidx];
             }
-            
-            if sendWaiters.size > 0 {
+
+            if !closed && sendWaiters.size > 0 {
 
                 var sender = sendWaiters.pop_front();
                 if bufferSize > 0 {
@@ -78,7 +87,7 @@ module Channel {
                 }
                 else x = sender.x;
 
-                sender.release();
+                sender.release(true);
             }
 
             else {
@@ -89,12 +98,16 @@ module Channel {
             }
             unlock();
 
-            return x;
+            return (x, true);
 
         }
 
-        proc send(val : eltType) {
+        proc send(val : eltType) throws {
             lock();
+
+            if closed {
+                throw new owned ChannelError("Sending on a closed channel");
+            }
 
             if count == bufferSize && recvWaiters.size == 0 {
                 var processing = new shared Waiter(val);
@@ -102,8 +115,10 @@ module Channel {
                 sendWaiters.push_back(processing);
 
                 unlock();
+                if processing.suspend() == false {
+                    throw new owned ChannelError("Sending on a closed channel");
+                }
 
-                processing.suspend();
             }
 
             else {
@@ -112,9 +127,8 @@ module Channel {
                     var receiver = recvWaiters.pop_front();
                     receiver.x = val;
 
-                    receiver.release();
+                    receiver.release(true);
                 }
-
                 else {
                     buffer[sendidx] = val;
 
@@ -125,6 +139,39 @@ module Channel {
                 unlock();
             }
         }
+
+        proc close() throws {
+
+            lock();
+            if closed {
+                unlock();
+                throw new owned ChannelError("Closing a closed channel");
+            }
+            closed = true;
+            unlock();
+
+            while(recvWaiters.size > 0) {
+                var receiver = recvWaiters.pop_front();
+                receiver.release(false);
+            }
+
+            while(sendWaiters.size > 0) {
+                var sender = sendWaiters.pop_front();
+                sender.release(false);
+            }
+        }
     }
+
+    class ChannelError : Error {
+        var msg:string;
+
+        proc init(msg: string) {
+            this.msg = msg;
+        }
+
+        override proc message() {
+            return msg;
+    }
+}
 
 }
