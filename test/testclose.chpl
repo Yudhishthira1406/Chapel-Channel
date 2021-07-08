@@ -11,7 +11,8 @@ var x = chan1.recv();
 
 var y = chan1.recv();
 
-writeln(x, y);
+writeln(x);
+writeln(y);
 
 
 
