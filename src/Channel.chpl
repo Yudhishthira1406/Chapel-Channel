@@ -1,23 +1,96 @@
 /* Documentation for Channel */
+
 module Channel {
 
     use LinkedLists;
+    use CPtr;
 
     class Waiter {
         
-        var process$ : single bool;
-        var x; 
+        var val : c_ptr;
+        var processPtr : c_ptr;
+        var isSelect : bool;
+        var isSelectDone : c_ptr; 
 
-        proc init(x1) {
-            x = x1;    
+        var prev : unmanaged Waiter?;
+        var next : unmanaged Waiter?;
+
+        proc init(ref value) {
+            val = c_ptrTo(value);
+            var process$ : single bool;
+            processPtr = c_ptrTo(process$);
+            isSelect = false;
+        }
+
+        proc init(ref value, ref process$ : single bool, ref selDone : atomic bool) {
+            val = c_ptrTo(value);
+            processPtr = c_ptrTo(process$);
+            isSelect = true;
+            isSelectDone = c_ptrTo(selDone);
         }
 
         proc suspend() : bool {
-            return process$.readFF();
+            return processPtr.deref().readFF();
         }
 
         proc release(status : bool) {
-            process$.writeEF(status);
+            processPtr.deref().writeEF(status);
+        }
+    }
+
+    class WaiterQue {
+        var front : unmanaged Waiter?;
+        var back : unmanaged Waiter?;
+
+        proc enque(waiter : Waiter) {
+            if(front == nil) {
+                front = waiter;
+                back = waiter;
+            }
+            else {
+                back.next = waiter;
+                waiter.prev = back;
+                back = waiter;
+            }
+        }
+
+        proc isEmpty() : bool{
+            return (front == nil);
+        }
+
+        proc deque() : Waiter {
+            if front == nil {
+                // Error
+                writeln("Error");
+            }
+            else if front == back {
+                var waiter = front;
+                front = nil;
+                back = nil;
+                return waiter;
+            }
+            else {
+                var waiter = front;
+                front = front.next;
+                front.back = nil;
+                waiter.next = nil;
+                return waiter;
+            }
+        }
+
+        proc deque(waiter : Waiter) {
+            if waiter == first {
+                deque();
+            }
+            else if waiter == back {
+                back = back.prev;
+                back.next = nil;
+            }
+            else if waiter.prev && waiter.next {
+                waiter.prev.next = waiter.next;
+                waiter.next.prev = waiter.prev;
+            }
+
         }
     }
 
@@ -30,16 +103,16 @@ module Channel {
         var count = 0;
         var closed = false;
 
-        var sendWaiters : LinkedList(shared Waiter);
-        var recvWaiters : LinkedList(shared Waiter);
+        var sendWaiters : WaiterQue;
+        var recvWaiters : WaiterQue;
 
         var lock$ : sync bool;
 
         proc init(type elt, size = 0) {
             eltType = elt;
             bufferSize = size;
-            sendWaiters = new LinkedList(shared Waiter(eltType));
-            recvWaiters = new LinkedList(shared Waiter(eltType));
+            sendWaiters = new WaiterQue();
+            recvWaiters = new WaiterQue();
         }
 
         proc lock() {
@@ -50,42 +123,36 @@ module Channel {
             lock$.readFE();
         }
 
-        proc recv() : (eltType, bool) {
+        proc recv(out val : eltType) : bool {
             lock();
-            
-            var x : eltType;
 
             if closed && count == 0 {
                 unlock();
-                return (x, false);
+                return false;
             }
 
-            if count == 0 && sendWaiters.size == 0 {
-                var processing = new shared Waiter(x);
-                recvWaiters.push_back(processing);
+            if count == 0 && sendWaiters.isEmpty() {
+                var processing = new unmanaged Waiter(val);
+                recvWaiters.enque(processing);
                 
                 unlock();
-                if processing.suspend() == false {
-                    return (x, false);
-                }
-                x = processing.x;
-                return (x, true);
+                return processing.suspend();
             }
 
             if bufferSize > 0 {
-                x = buffer[recvidx];
+                val = buffer[recvidx];
             }
 
-            if !closed && sendWaiters.size > 0 {
+            if !closed && !sendWaiters.isEmpty() {
 
-                var sender = sendWaiters.pop_front();
+                var sender = sendWaiters.deque();
                 if bufferSize > 0 {
-                    buffer[recvidx] = sender.x;
+                    buffer[recvidx] = sender.val.deref();
 
                     sendidx = (sendidx + 1) % bufferSize;
                     recvidx = (recvidx + 1) % bufferSize;
                 }
-                else x = sender.x;
+                else val = sender.val.deref();
 
                 sender.release(true);
             }
@@ -98,7 +165,7 @@ module Channel {
             }
             unlock();
 
-            return (x, true);
+            return true;
 
         }
 
@@ -109,10 +176,10 @@ module Channel {
                 throw new owned ChannelError("Sending on a closed channel");
             }
 
-            if count == bufferSize && recvWaiters.size == 0 {
-                var processing = new shared Waiter(val);
+            if count == bufferSize && recvWaiters.empty() {
+                var processing = new unmanaged Waiter(val);
                 
-                sendWaiters.push_back(processing);
+                sendWaiters.enque(processing);
 
                 unlock();
                 if processing.suspend() == false {
@@ -122,10 +189,10 @@ module Channel {
             }
 
             else {
-                if recvWaiters.size > 0 {
+                if !recvWaiters.isEmpty() {
 
-                    var receiver = recvWaiters.pop_front();
-                    receiver.x = val;
+                    var receiver = recvWaiters.deque();
+                    receiver.val.deref() = val;
 
                     receiver.release(true);
                 }
@@ -150,12 +217,12 @@ module Channel {
             closed = true;
             unlock();
 
-            while(recvWaiters.size > 0) {
-                var receiver = recvWaiters.pop_front();
+            while(!recvWaiters.isEmpty()) {
+                var receiver = recvWaiters.deque();
                 receiver.release(false);
             }
 
-            while(sendWaiters.size > 0) {
+            while(!sendWaiters.isEmpty()) {
                 var sender = sendWaiters.pop_front();
                 sender.release(false);
             }
@@ -171,7 +238,6 @@ module Channel {
 
         override proc message() {
             return msg;
+        }
     }
-}
-
 }
