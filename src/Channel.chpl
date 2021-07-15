@@ -6,16 +6,17 @@ module Channel {
     use CPtr;
 
     class Waiter {
-        
-        var val : c_ptr;
-        var processPtr : c_ptr;
+        type valueType;
+        var val : c_ptr(valueType);
+        var processPtr : c_ptr(single bool);
         var isSelect : bool;
-        var isSelectDone : c_ptr; 
+        var isSelectDone : c_ptr(atomic bool); 
 
         var prev : unmanaged Waiter?;
         var next : unmanaged Waiter?;
 
         proc init(ref value) {
+            valueType = value.type;
             val = c_ptrTo(value);
             var process$ : single bool;
             processPtr = c_ptrTo(process$);
@@ -23,6 +24,7 @@ module Channel {
         }
 
         proc init(ref value, ref process$ : single bool, ref selDone : atomic bool) {
+            valueType = value.type;
             val = c_ptrTo(value);
             processPtr = c_ptrTo(process$);
             isSelect = true;
