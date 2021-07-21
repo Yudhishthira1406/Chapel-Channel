@@ -6,5 +6,5 @@ chan1.close();
 try {
     chan1.close();
 } catch e {
-    writeln(e.message());
+    writeln("Error: ", e.message());
 }

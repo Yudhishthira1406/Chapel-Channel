@@ -1,7 +1,7 @@
 use Channel;
 config const n = 100;
 
-var chan1 = new chan(int, 1);
+var chan1 = new chan(int, 5);
 
 var total1, total2 : atomic int;
 coforall i in 1..n {
@@ -12,7 +12,8 @@ coforall i in 1..n {
     }
     else {
         // writeln("Task ", i, " received ", chan1.recv());
-        var (x, ok) = chan1.recv();
+        var x : int;
+        chan1.recv(x);
         total2.add(x);
     }
 }

@@ -7,12 +7,13 @@ begin {
     chan1.send(1);
     chan1.close();
 }
-var x = chan1.recv();
+var x1 : int;
+var x = chan1.recv(x1);
+var y1 : int;
+var y = chan1.recv(y1);
 
-var y = chan1.recv();
-
-writeln(x);
-writeln(y);
+writeln((x1, x));
+writeln((y1, y));
 
 
 
