@@ -5,6 +5,8 @@ module Channel {
     use CPtr;
     use Sort;
     use SysCTypes;
+    use List;
+    use Random;
 
     class Waiter {
         type valueType;
@@ -24,8 +26,8 @@ module Channel {
         }
 
         proc init(ref value, ref process$ : single bool, ref selDone : atomic bool) {
-            valueType = value.type;
-            val = c_ptrTo(value);
+            valueType = value.eltType;
+            val = value;
             processPtr = c_ptrTo(process$);
             isSelect = true;
             isSelectDone = c_ptrTo(selDone);
@@ -126,14 +128,6 @@ module Channel {
             lock$.readFE();
         }
 
-        proc canRecv() : bool {
-            return count > 0 || (!closed && !sendWaiters.isEmpty());
-        }
-
-        proc canSend() : bool {
-            return !closed && (count < bufferSize || !recvWaiters.isEmpty());
-        }
-
         proc recv(out val : eltType, selected = false) : bool {
             if !selected then lock();
 
@@ -142,8 +136,8 @@ module Channel {
                 return false;
             }
 
-            while !sendWaiters.isEmpty() && sendWaiters.front.isSelect {
-                if !sendWaiters.front.isSelectDone.deref().testAndSet() {
+            while !sendWaiters.isEmpty() && sendWaiters.front!.isSelect {
+                if !sendWaiters.front!.isSelectDone.deref().testAndSet() {
                     break;
                 }
                 else sendWaiters.deque();
@@ -199,15 +193,15 @@ module Channel {
                 
             }
 
-            while !recvWaiters.isEmpty() && recvWaiters.front.isSelect {
-                if !recvWaiters.front.isSelectDone.deref().testAndSet() {
+            while !recvWaiters.isEmpty() && recvWaiters.front!.isSelect {
+                if !recvWaiters.front!.isSelectDone.deref().testAndSet() {
                     break;
                 }
                 else recvWaiters.deque();
             }
 
             if count == bufferSize && recvWaiters.isEmpty() {
-                if selected return false;
+                if selected then return false;
                 var process$ : single bool;
                 var processing = new unmanaged Waiter(val, process$);
                 
@@ -218,6 +212,7 @@ module Channel {
                 if status == false {
                     throw new owned ChannelError("Sending on a closed channel");
                 }
+                return status;
 
             }
             else {
@@ -247,16 +242,19 @@ module Channel {
                 throw new owned ChannelError("Closing a closed channel");
             }
             closed = true;
-            unlock();
-
+            var queued = new WaiterQue(eltType);
             while(!recvWaiters.isEmpty()) {
-                var receiver = recvWaiters.deque();
-                receiver.release(false);
+                queued.enque(recvWaiters.deque());
             }
 
             while(!sendWaiters.isEmpty()) {
-                var sender = sendWaiters.deque();
-                sender.release(false);
+                queued.enque(sendWaiters.deque());
+            }
+            unlock();
+
+            while(!queued.isEmpty()) {
+                var waiter = queued.deque();
+                waiter.release(false);
             }
         }
     }
@@ -305,7 +303,7 @@ module Channel {
         return ((case.get().channel : c_void_ptr) : c_uintptr);
     }
 
-    proc lockSel(lockOrder : list(Base))) {
+    proc lockSel(lockOrder : list(Base)) {
         for channelWrapper in lockOrder do channelWrapper.get().lock(); 
     }
 
@@ -314,7 +312,7 @@ module Channel {
         for idx in lockOrder.indices() by -1 do lockOrder[idx].get().unlock();
     }
 
-    proc selectProcess(cases : [] Base) {
+    proc selectProcess(cases : [] Base, default = false) {
         var numCases = cases.domain.size;
 
         var addrCmp : Comparator;
@@ -328,24 +326,56 @@ module Channel {
         }
         var done = false;
         lockSel(lockOrder);
+
+        shuffle(cases);
         for case in cases {
             if case.get().operation == 0 {
-                if case.get().channel.canRecv() {
-                    case.get().channel.recv(case.get().val.deref());
-                    done = true;
-                    break;
-                }
+                done = case.get().channel.recv(case.get().val.deref());
+                if done then break;
             }
             else {
-                if case.get().channel.canSend() {
-                    case.get().channel.send(case.get().val.deref());
-                    done = true;
-                    break;
-                }
+                done = case.get().channel.send(case.get().val.deref());
+                if done then break;
             }
         }
 
+        if done || default {
+            unlockSel(lockOrder);
+            return;
+        }
+
+        var isDone : atomic bool;
+        var process$ : single bool;
+
+        var waiters : [0..#numCases] Base;
+        for idx in 0..#numCases {
+            var channel = cases[idx].get().channel;
+            var waiter = new unmanaged Waiter(cases[idx].get().val, process$, isDone);
+            waiters[idx] = new Child(waiter) : Base;
+            if cases[idx].get().operation == 0 {
+                channel.recvWaiters.enque(waiter);
+            }
+            else {
+                channel.sendWaiters.enque(waiter);
+            }
+        }
+
+        unlockSel(lockOrder);
+        process$.readFF();
         
+        lockSel(lockOrder);
+
+        for idx in 0..#numCases {
+            var channel = cases[idx].get().channel;
+            var waiter = waiters[idx].get();
+            if cases.get().operation == 0 {
+                channel.recvWaiters.deque(waiter);
+            }
+            else {
+                channel.sendWaiters.deque(waiter);
+            }
+        }
+        unlockSel(lockOrder);
     }
 
 
