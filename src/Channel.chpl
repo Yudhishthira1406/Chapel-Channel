@@ -285,10 +285,6 @@ module Channel {
         var operation : int;
         var waiter : unmanaged Waiter(eltType)?;
 
-        proc writeThis(ch : channel) {
-            ch <~> val;
-        }
-
         proc init(ref value, ref chan1 : chan(?), oper) {
             eltType = value.type;
             val = c_ptrTo(value);
