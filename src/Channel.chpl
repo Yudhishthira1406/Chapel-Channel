@@ -91,9 +91,9 @@ module Channel {
                 back = back!.prev;
                 back!.next = nil;
             }
-            else if waiter.prev && waiter.next {
-                waiter.prev.next = waiter.next;
-                waiter.next.prev = waiter.prev;
+            else if waiter.prev != nil && waiter.next != nil {
+                waiter.prev!.next = waiter.next;
+                waiter.next!.prev = waiter.prev;
             }
 
         }
@@ -188,9 +188,7 @@ module Channel {
 
             if closed {
                 if !selected then unlock();
-                else return false;
                 throw new owned ChannelError("Sending on a closed channel");
-                
             }
 
             while !recvWaiters.isEmpty() && recvWaiters.front!.isSelect {
@@ -271,57 +269,96 @@ module Channel {
         }
     }
 
-    record SelCase {
+    class BaseClass {
+        proc lockChannel() { }
+        proc unlockChannel() { }
+        proc sendRecv() : bool { return true; }
+        proc getAddr() : c_uintptr { return 0 : c_uintptr; }
+        proc enqueWaiter(ref process$ : single bool, ref isDone : atomic bool) { }
+        proc dequeWaiter() { }
+    }
+
+    class SelCase : BaseClass {
         type eltType;
         var val : c_ptr(eltType);
         var channel : chan(eltType);
-        var operation : uint(8);
+        var operation : int;
+        var waiter : unmanaged Waiter(eltType)?;
 
+        proc writeThis(ch : channel) {
+            ch <~> val;
+        }
 
-        proc init(ref value, oper, chan1) {
+        proc init(ref value, ref chan1 : chan(?), oper) {
             eltType = value.type;
             val = c_ptrTo(value);
-            channel = chan1;
+            channel = chan1.borrow();
             operation = oper;
         }
-    }
 
-    class Base {
-        proc get() { }
-    }
+        override proc lockChannel() {
+            channel.lock();
+        }
 
-    class Child : Base {
-        var data;
-        override proc get() ref{
-            return data;
+        override proc unlockChannel() {
+            channel.unlock();
+        }
+
+        override proc sendRecv() : bool {
+            if operation == 0 {
+                return channel.recv(val.deref(),true);
+            }
+            else return (try! channel.send(val.deref(), true));
+        }
+
+        override proc getAddr() : c_uintptr {
+            return ((channel : c_void_ptr) : c_uintptr);
+        }
+
+        override proc enqueWaiter(ref process$ : single bool, ref isDone : atomic bool) {
+            waiter = new unmanaged Waiter(val, process$, isDone);
+            if operation == 0 {
+                channel.recvWaiters.enque(waiter!);
+            }
+            else {
+                channel.sendWaiters.enque(waiter!);
+            }
+        }
+
+        override proc dequeWaiter() {
+            if operation == 0 {
+                channel.recvWaiters.deque(waiter!);
+            }
+            else channel.sendWaiters.deque(waiter!);
+            delete waiter;
         }
     }
 
     record Comparator { }
 
-    proc Comparator.key(case : Base) {
-        return ((case.get().channel : c_void_ptr) : c_uintptr);
+    proc Comparator.compare(case1, case2) {
+        return case1.getAddr() - case2.getAddr();
     }
 
-    proc lockSel(lockOrder : list(Base)) {
-        for channelWrapper in lockOrder do channelWrapper.get().lock(); 
+    proc lockSel(lockOrder : list(shared BaseClass)) {
+        for channelWrapper in lockOrder do channelWrapper.lockChannel();
     }
 
 
-    proc unlockSel(lockOrder : list(Base)) {
-        for idx in lockOrder.indices() by -1 do lockOrder[idx].get().unlock();
+    proc unlockSel(lockOrder : list(shared BaseClass)) {
+        for idx in lockOrder.indices by -1 do lockOrder[idx].unlockChannel();
     }
 
-    proc selectProcess(cases : [] Base, default = false) {
+    proc selectProcess(cases : [] shared BaseClass, default : bool = false) {
         var numCases = cases.domain.size;
 
         var addrCmp : Comparator;
-        sort(cases, Comparator = addrCmp);
+        sort(cases, comparator = addrCmp);
 
-        var lockOrder = list(Base);
+        var lockOrder = new list(shared BaseClass);
         for idx in cases.domain {
-            if idx == 0 || cases[idx].channel != cases[idx - 1].channel {
-                lockOrder.append(new Child(cases[idx].channel) : Base);
+            if idx == 0 || cases[idx].getAddr() != cases[idx - 1].getAddr() {
+                lockOrder.append(cases[idx]);
             }
         }
         var done = false;
@@ -329,14 +366,8 @@ module Channel {
 
         shuffle(cases);
         for case in cases {
-            if case.get().operation == 0 {
-                done = case.get().channel.recv(case.get().val.deref());
-                if done then break;
-            }
-            else {
-                done = case.get().channel.send(case.get().val.deref());
-                if done then break;
-            }
+            done = case.sendRecv();
+            if done then break;
         }
 
         if done || default {
@@ -347,17 +378,8 @@ module Channel {
         var isDone : atomic bool;
         var process$ : single bool;
 
-        var waiters : [0..#numCases] Base;
-        for idx in 0..#numCases {
-            var channel = cases[idx].get().channel;
-            var waiter = new unmanaged Waiter(cases[idx].get().val, process$, isDone);
-            waiters[idx] = new Child(waiter) : Base;
-            if cases[idx].get().operation == 0 {
-                channel.recvWaiters.enque(waiter);
-            }
-            else {
-                channel.sendWaiters.enque(waiter);
-            }
+        for case in cases {
+            cases.enqueWaiter(process$, isDone);
         }
 
         unlockSel(lockOrder);
@@ -365,18 +387,9 @@ module Channel {
         
         lockSel(lockOrder);
 
-        for idx in 0..#numCases {
-            var channel = cases[idx].get().channel;
-            var waiter = waiters[idx].get();
-            if cases.get().operation == 0 {
-                channel.recvWaiters.deque(waiter);
-            }
-            else {
-                channel.sendWaiters.deque(waiter);
-            }
+        for case in cases {
+            case.dequeWaiter();
         }
         unlockSel(lockOrder);
     }
-
-
 }
