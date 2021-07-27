@@ -12,5 +12,6 @@ proc sender(channel : chan) {
 
 begin sender(chan1); // New task to send a value
 
-var received = chan1.recv(); // Receive the first available value
+var received : int;
+chan1.recv(received); // Receive the first available value
 writeln("Received ", received);
