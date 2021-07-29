@@ -269,7 +269,7 @@ module Channel {
         }
     }
 
-    class BaseClass {
+    class SelBaseClass {
         proc lockChannel() { }
         proc unlockChannel() { }
         proc sendRecv() : bool { return true; }
@@ -278,14 +278,16 @@ module Channel {
         proc dequeWaiter() { }
     }
 
-    class SelCase : BaseClass {
+    enum selOperation { recv, send }
+
+    class SelCase : SelBaseClass {
         type eltType;
         var val : c_ptr(eltType);
         var channel : chan(eltType);
-        var operation : int;
+        var operation : selOperation;
         var waiter : unmanaged Waiter(eltType)?;
 
-        proc init(ref value, ref chan1 : chan(?), oper) {
+        proc init(ref value, ref chan1 : chan(?), oper : selOperation) {
             eltType = value.type;
             val = c_ptrTo(value);
             channel = chan1.borrow();
@@ -301,7 +303,7 @@ module Channel {
         }
 
         override proc sendRecv() : bool {
-            if operation == 0 {
+            if operation == selOperation.recv {
                 return channel.recv(val.deref(),true);
             }
             else return (try! channel.send(val.deref(), true));
@@ -313,7 +315,7 @@ module Channel {
 
         override proc enqueWaiter(ref process$ : single bool, ref isDone : atomic bool) {
             waiter = new unmanaged Waiter(val, process$, isDone);
-            if operation == 0 {
+            if operation == selOperation.recv {
                 channel.recvWaiters.enque(waiter!);
             }
             else {
@@ -322,7 +324,7 @@ module Channel {
         }
 
         override proc dequeWaiter() {
-            if operation == 0 {
+            if operation == selOperation.recv {
                 channel.recvWaiters.deque(waiter!);
             }
             else channel.sendWaiters.deque(waiter!);
@@ -336,22 +338,22 @@ module Channel {
         return case1.getAddr() - case2.getAddr();
     }
 
-    proc lockSel(lockOrder : list(shared BaseClass)) {
+    proc lockSel(lockOrder : list(shared SelBaseClass)) {
         for channelWrapper in lockOrder do channelWrapper.lockChannel();
     }
 
 
-    proc unlockSel(lockOrder : list(shared BaseClass)) {
+    proc unlockSel(lockOrder : list(shared SelBaseClass)) {
         for idx in lockOrder.indices by -1 do lockOrder[idx].unlockChannel();
     }
 
-    proc selectProcess(cases : [] shared BaseClass, default : bool = false) {
+    proc selectProcess(cases : [] shared SelBaseClass, default : bool = false) {
         var numCases = cases.domain.size;
 
         var addrCmp : Comparator;
         sort(cases, comparator = addrCmp);
 
-        var lockOrder = new list(shared BaseClass);
+        var lockOrder = new list(shared SelBaseClass);
         for idx in cases.domain {
             if idx == 0 || cases[idx].getAddr() != cases[idx - 1].getAddr() {
                 lockOrder.append(cases[idx]);
