@@ -1,7 +1,7 @@
 use Channel;
 
 config const n = 4000;
-config const size = 0;
+config const size = 3;
 var a, b, c : atomic int;
 
 var chan1 = new chan(int, size);
@@ -18,8 +18,8 @@ coforall i in 1..n with (ref chan1, ref chan2) {
     }
     else {
         var x1 : int, x2 : int;
-        var sel1 : SelBaseClass = new shared SelCase(x1, chan1, selOperation.recv);
-        var sel2 : SelBaseClass = new shared SelCase(x2, chan2, selOperation.recv);
+        var sel1 : SelBaseClass = new shared SelCase(x1, chan1, selOperation.recv, 0);
+        var sel2 : SelBaseClass = new shared SelCase(x2, chan2, selOperation.recv, 1);
 
         var arr = [sel1, sel2];
         selectProcess(arr);
