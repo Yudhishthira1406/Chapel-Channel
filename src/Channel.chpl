@@ -13,7 +13,8 @@ module Channel {
         var val : c_ptr(valueType);
         var processPtr : c_ptr(single bool);
         var isSelect : bool;
-        var isSelectDone : c_ptr(atomic bool); 
+        var isSelectDone : c_ptr(atomic int);
+        var selID : int = -1;
 
         var prev : unmanaged Waiter(valueType)?;
         var next : unmanaged Waiter(valueType)?;
@@ -25,12 +26,13 @@ module Channel {
             isSelect = false;
         }
 
-        proc init(ref value, ref process$ : single bool, ref selDone : atomic bool) {
+        proc init(ref value, ref process$ : single bool, ref selDone : atomic int, caseID : int) {
             valueType = value.eltType;
             val = value;
             processPtr = c_ptrTo(process$);
             isSelect = true;
             isSelectDone = c_ptrTo(selDone);
+            selID = caseID;
         }
 
         proc suspend() : bool {
@@ -137,7 +139,7 @@ module Channel {
             }
 
             while !sendWaiters.isEmpty() && sendWaiters.front!.isSelect {
-                if !sendWaiters.front!.isSelectDone.deref().testAndSet() {
+                if sendWaiters.front!.isSelectDone.deref().compareAndSwap(-1, sendWaiters.front!.selID) {
                     break;
                 }
                 else sendWaiters.deque();
@@ -192,7 +194,7 @@ module Channel {
             }
 
             while !recvWaiters.isEmpty() && recvWaiters.front!.isSelect {
-                if !recvWaiters.front!.isSelectDone.deref().testAndSet() {
+                if recvWaiters.front!.isSelectDone.deref().compareAndSwap(-1, recvWaiters.front!.selID) {
                     break;
                 }
                 else recvWaiters.deque();
@@ -272,9 +274,10 @@ module Channel {
     class SelBaseClass {
         proc lockChannel() { }
         proc unlockChannel() { }
+        proc getID() : int { return 0; }
         proc sendRecv() : bool { return true; }
         proc getAddr() : c_uintptr { return 0 : c_uintptr; }
-        proc enqueWaiter(ref process$ : single bool, ref isDone : atomic bool) { }
+        proc enqueWaiter(ref process$ : single bool, ref isDone : atomic int) { }
         proc dequeWaiter() { }
     }
 
@@ -286,12 +289,14 @@ module Channel {
         var channel : chan(eltType);
         var operation : selOperation;
         var waiter : unmanaged Waiter(eltType)?;
+        var id : int;
 
-        proc init(ref value, ref chan1 : chan(?), oper : selOperation) {
+        proc init(ref value, ref chan1 : chan(?), oper : selOperation, caseID) {
             eltType = value.type;
             val = c_ptrTo(value);
             channel = chan1.borrow();
             operation = oper;
+            id = caseID;
         }
 
         override proc lockChannel() {
@@ -300,6 +305,10 @@ module Channel {
 
         override proc unlockChannel() {
             channel.unlock();
+        }
+
+        override proc getID() : int {
+            return id;
         }
 
         override proc sendRecv() : bool {
@@ -313,8 +322,8 @@ module Channel {
             return ((channel : c_void_ptr) : c_uintptr);
         }
 
-        override proc enqueWaiter(ref process$ : single bool, ref isDone : atomic bool) {
-            waiter = new unmanaged Waiter(val, process$, isDone);
+        override proc enqueWaiter(ref process$ : single bool, ref isDone : atomic int) {
+            waiter = new unmanaged Waiter(val, process$, isDone, id);
             if operation == selOperation.recv {
                 channel.recvWaiters.enque(waiter!);
             }
@@ -347,7 +356,7 @@ module Channel {
         for idx in lockOrder.indices by -1 do lockOrder[idx].unlockChannel();
     }
 
-    proc selectProcess(cases : [] shared SelBaseClass, default : bool = false) {
+    proc selectProcess(cases : [] shared SelBaseClass, default : bool = false) : int{
         var numCases = cases.domain.size;
 
         var addrCmp : Comparator;
@@ -359,21 +368,23 @@ module Channel {
                 lockOrder.append(cases[idx]);
             }
         }
-        var done = false;
+        var done = -1;
         lockSel(lockOrder);
 
         shuffle(cases);
         for case in cases {
-            done = case.sendRecv();
-            if done then break;
+            if case.sendRecv() {
+                done = case.getID();
+                break;
+            }
         }
 
-        if done || default {
+        if done != -1 || default {
             unlockSel(lockOrder);
-            return;
+            return done;
         }
 
-        var isDone : atomic bool;
+        var isDone : atomic int = -1;
         var process$ : single bool;
 
         for case in cases {
@@ -389,5 +400,6 @@ module Channel {
             case.dequeWaiter();
         }
         unlockSel(lockOrder);
+        return isDone.read();
     }
 }
