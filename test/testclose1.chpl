@@ -3,7 +3,7 @@ use Channel;
 const debug = true;
 var chan1 = new chan(int);
 begin {
-    try! {
+    try {
         chan1.send(5);
     } catch e {
         if debug then writeln("Error: ", e.message());
