@@ -370,6 +370,15 @@ module Channel {
                 waiter.release(false);
             }
         }
+
+        iter these() {
+            while(true) {
+                var received : eltType;
+                var status = recv(received);
+                if !status then break;
+                yield received;
+            }
+        }
     }
 
     /* Error class for Channel */
@@ -485,6 +494,7 @@ module Channel {
         for idx in lockOrder.indices by -1 do lockOrder[idx].unlockChannel();
     }
 
+    /* Entry point for select statements */
     pragma "no doc"
     proc selectProcess(cases : [] shared SelBaseClass, default : bool = false) : int{
         var numCases = cases.domain.size;
