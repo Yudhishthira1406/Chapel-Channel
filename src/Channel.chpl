@@ -371,6 +371,7 @@ module Channel {
             }
         }
 
+        /* Iterator to receive data from the channel until it is closed. */
         iter these() {
             while(true) {
                 var received : eltType;
