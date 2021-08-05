@@ -421,12 +421,12 @@ module Channel {
         var waiter : unmanaged Waiter(eltType)?;
         var id : int;
 
-        proc init(ref value, ref chan1 : chan(?), oper : selOperation, caseID) {
-            eltType = value.type;
-            val = c_ptrTo(value);
-            channel = chan1.borrow();
-            operation = oper;
-            id = caseID;
+        proc init(ref value, ref channel : chan(?), op : selOperation, caseID : int) {
+            this.eltType = value.type;
+            this.val = c_ptrTo(value);
+            this.channel = channel.borrow();
+            this.operation = op;
+            this.id = caseID;
         }
 
         override proc lockChannel() {
